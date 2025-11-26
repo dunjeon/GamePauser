@@ -1,7 +1,7 @@
 ﻿// =============================================================================
 // GamePauser - Accessibility-focused process pauser
 // Version: November 2025 - stable, reliable, no freezes
-// Author:  (your name here)
+// Author:  (Dunjeon)
 //
 // Purpose:
 //   Press a global hotkey → instantly suspend the foreground process
@@ -317,4 +317,5 @@ int main()
     if (g_targetPid) SuspendOrResumeProcess(false);
     UnregisterHotKey(nullptr, HOTKEY_ID);
     return 0;
+
 }

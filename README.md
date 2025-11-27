@@ -28,7 +28,7 @@ Built primarily for accessibility (RSI, limited mobility, one-handed gaming, mot
 4. Launch your game, bring it to the foreground  
 5. Press your hotkey → game freezes instantly, keyboard is globally blocked (this is normal — shown in console)  
 6. Type whatever you need (chat, menu navigation, macros…)  
-7. Press the hotkey again → game resumes and everything you typed lands exactly as intended
+7. Press the hotkey again — at this point only the main key is needed (e.g., just P, or whatever key you set in GamePauser.ini). Ctrl, Alt, Shift, or Win can all be released; the moment you tap that single key, the game instantly resumes and every keystroke you typed while paused is replayed exactly as intended.
 
 ### Configuration (GamePauser.ini)
 ```ini

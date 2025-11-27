@@ -156,7 +156,7 @@ static void SetCaptureHook(bool enable)
             GetModuleHandle(nullptr), 0);
         if (g_kbHook) {
             std::cout << "[Capturing keystrokes - they will be delivered on resume]\n";
-            std::cout << "[Keyboard is globally blocked while paused — this is normal]\n";
+            std::cout << "[Keyboard is globally blocked while paused - this is normal]\n";
         }
     }
     else if (!enable && g_kbHook) {
@@ -393,3 +393,4 @@ int main()
     // Normal exit path (atexit will still run)
     return 0;
 }
+

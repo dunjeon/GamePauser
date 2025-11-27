@@ -36,8 +36,6 @@ That single-key unpause is deliberate: after typing a long sequence you’re usu
 PauseKey = P
 
 ; Combine with + (case doesn’t matter)
+; You can use Win, Shift, Crtl, Alt
 Modifiers = Ctrl+Alt
 ```
-
-That’s literally it. No services, no admin prompts after the first run, no surprises.  
-Just the most reliable hard pause you’ll ever find. Enjoy.

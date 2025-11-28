@@ -1,6 +1,6 @@
 // =============================================================================
 // GamePauser - Accessibility-focused process pauser
-// Version: 1.2.0, November 2025 - stable, reliable, no freezes
+// Version: 1.2.1, November 2025 - stable, reliable, no freezes
 // Author: Dunjeon
 //
 // Purpose:
@@ -38,6 +38,7 @@ std::vector<INPUT> g_capturedWhilePaused; // Keystrokes queued for replay
 HHOOK g_kbHook = nullptr; // Low-level keyboard hook handle
 WORD g_pauseVK = 'P'; // Virtual-key code for the pause hotkey
 UINT g_pauseMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+std::set<WORD> g_heldKeys; // Keys physically held when resuming (during-pause only, post-clear)
 bool g_unpauseOnNextEsc = false; // True only while paused - Esc cancels
 bool g_unpauseOnNextEnter = false; // True only while paused - Enter accepts without sending itself
 // -----------------------------------------------------------------------------
@@ -151,6 +152,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         SuspendOrResumeProcess(false); // ← game threads resume
         g_targetPid = 0;
         g_capturedWhilePaused.clear();
+        g_heldKeys.clear();
         std::cout << "[ESCAPE] Unpaused - all input discarded\n";
         return -1; // eat this Esc down (keyup will never reach us)
     }
@@ -161,6 +163,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         SuspendOrResumeProcess(false);
         g_targetPid = 0;
         g_capturedWhilePaused.clear();
+        g_heldKeys.clear();
         std::cout << "[ESCAPE] Unpaused - all input discarded\n";
         return -1; // eat Esc down
     }
@@ -184,6 +187,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     }
     // Normal capture
     if (wParam == WM_KEYDOWN) {
+        g_heldKeys.insert(static_cast<WORD>(kbd->vkCode));
         INPUT inp = {};
         inp.type = INPUT_KEYBOARD;
         inp.ki.wVk = static_cast<WORD>(kbd->vkCode);
@@ -191,6 +195,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         g_capturedWhilePaused.push_back(inp);
     }
     else if (wParam == WM_KEYUP) {
+        g_heldKeys.erase(static_cast<WORD>(kbd->vkCode));
         INPUT inp = {};
         inp.type = INPUT_KEYBOARD;
         inp.ki.wVk = static_cast<WORD>(kbd->vkCode);
@@ -231,11 +236,13 @@ static void SuspendOrResumeProcess(bool suspend)
 // -----------------------------------------------------------------------------
 static void SendCapturedInputs()
 {
-    if (g_capturedWhilePaused.empty()) {
+    if (g_capturedWhilePaused.empty() && g_heldKeys.empty()) {
         std::cout << "[Nothing to send]\n";
         return;
     }
-    std::cout << "[Delivering input...]\n";
+    std::cout << "[Delivering input";
+    if (!g_heldKeys.empty()) std::cout << " (chord of " << g_heldKeys.size() << " keys)";
+    std::cout << "...]\n";
     Sleep(380);
     HWND fg = GetForegroundWindow();
     DWORD fgThreadId = GetWindowThreadProcessId(fg, nullptr);
@@ -244,6 +251,21 @@ static void SendCapturedInputs()
         attached = AttachThreadInput(GetCurrentThreadId(), fgThreadId, TRUE);
         if (attached) Sleep(15);
     }
+    // Press all currently held keys first
+    for (WORD vk : g_heldKeys) {
+        INPUT inp = {};
+        inp.type = INPUT_KEYBOARD;
+        inp.ki.wVk = vk;
+        for (const auto& saved : g_capturedWhilePaused) {
+            if (saved.ki.wVk == vk && !(saved.ki.dwFlags & KEYEVENTF_KEYUP)) {
+                if (saved.ki.dwFlags & KEYEVENTF_EXTENDEDKEY)
+                    inp.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+                break;
+            }
+        }
+        SendInput(1, &inp, sizeof(INPUT));
+    }
+    Sleep(1);
     // Replay recorded events
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -256,6 +278,7 @@ static void SendCapturedInputs()
     if (attached) AttachThreadInput(GetCurrentThreadId(), fgThreadId, FALSE);
     std::cout << "[Finished replay]\n";
     g_capturedWhilePaused.clear();
+    g_heldKeys.clear();
 }
 // -----------------------------------------------------------------------------
 // Configuration and cleanup
@@ -354,7 +377,8 @@ int main()
                 }
                 g_targetPid = pid;
                 g_capturedWhilePaused.clear();
-                // NEW: Clear any held keys before suspending
+                g_heldKeys.clear();  // Reset for during-pause tracking only
+                // Clear any held keys before suspending
                 std::set<WORD> initialHeld;
                 for (int vk = 1; vk < 256; ++vk) {  // Skip 0, cover common range
                     if (GetAsyncKeyState(vk) & 0x8000) {
@@ -391,4 +415,3 @@ int main()
     }
     return 0;
 }
-

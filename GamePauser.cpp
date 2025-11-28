@@ -1,6 +1,6 @@
 // =============================================================================
 // GamePauser - Accessibility-focused process pauser
-// Version: November 2025 - stable, reliable, no freezes
+// Version: 1.2.0, November 2025 - stable, reliable, no freezes
 // Author: Dunjeon
 //
 // Purpose:
@@ -391,3 +391,4 @@ int main()
     }
     return 0;
 }
+

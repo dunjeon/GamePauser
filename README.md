@@ -2,7 +2,7 @@
 
 A simple, accessibility-focused tool for pausing foreground processes (like games or emulators) on Windows. Hit a hotkey to suspend the app, type notes or commands safely, then resume and replay those keystrokes exactly. No freezes, reliable cleanup on exit.
 
-Version 1.2.0 – stable as of November 2025.
+Version 1.2.1 – stable as of November 2025.
 
 ## Features
 - **Instant pause/resume**: Targets the active window's process via hotkey.

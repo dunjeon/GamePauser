@@ -1,6 +1,6 @@
 // =============================================================================
 // GamePauser - Accessibility-focused process pauser
-// Version: 1.2.1, November 2025 - stable, reliable, no freezes
+// Version: 1.2.3, November 2025 - stable, with enhanced retro logging and detailed INI
 // Author: Dunjeon
 //
 // Purpose:
@@ -15,6 +15,7 @@
 // • Simple GamePauser.ini next to the exe for hotkey configuration
 // • Guaranteed unpause on normal exit, Ctrl+C, or console window close
 // • Special behavior: Escape = cancel + discard, Enter = accept without sending Enter
+// • Retro logging: Old-terminal style with amber tint (toggle in ini)
 // =============================================================================
 #include <windows.h>
 #include <tlhelp32.h>
@@ -28,6 +29,9 @@
 #include <chrono>
 #include <thread>
 #include <set>
+#include <iomanip> // For timestamp formatting
+#include <sstream> // For std::ostringstream
+#include <ctime> // For std::tm and localtime_s
 // -----------------------------------------------------------------------------
 // Global state
 // -----------------------------------------------------------------------------
@@ -40,7 +44,11 @@ WORD g_pauseVK = 'P'; // Virtual-key code for the pause hotkey
 UINT g_pauseMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
 std::set<WORD> g_heldKeys; // Keys physically held when resuming (during-pause only, post-clear)
 bool g_unpauseOnNextEsc = false; // True only while paused - Esc cancels
-bool g_unpauseOnNextEnter = false; // True only while paused - Enter accepts without sending itself
+bool g_unpauseOnNextEnter = false; // True only while paused - Enter accepts without sending Enter
+bool g_retroLogs = true; // Toggle for amber/retro styling
+HANDLE g_console = nullptr; // For color control
+const WORD AMBER_COLOR = 14; // Bright yellow/orange for that phosphor glow
+const WORD NORMAL_COLOR = 7; // Default white
 // -----------------------------------------------------------------------------
 // Forward declarations (required due to function ordering and hook callback)
 // -----------------------------------------------------------------------------
@@ -48,6 +56,7 @@ static void CleanupAndExit();
 static void SetCaptureHook(bool enable);
 static void SuspendOrResumeProcess(bool suspend);
 static void SendCapturedInputs();
+static void LogRetro(const std::string& msg); // Enhanced: Styled logging with more events
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
 // -----------------------------------------------------------------------------
 // Utility functions
@@ -100,13 +109,85 @@ static void CreateDefaultIni()
 {
     std::ofstream f(g_iniPath);
     if (!f) return;
-    f << "; GamePauser configuration\n"
-        << "; Hotkey to pause/resume the current foreground process\n\n"
-        << "; Examples of valid keys: P, Pause, F24, Space, Enter, Esc\n"
-        << "; Valid modifiers: Ctrl, Alt, Shift, Win (combine with +)\n\n"
+    f << "; =============================================================================\n"
+        << "; GamePauser.ini - Configuration File\n"
+        << "; =============================================================================\n"
+        << ";\n"
+        << "; This is a simple text file for customizing GamePauser. Open it in Notepad or any text editor.\n"
+        << "; Lines starting with ';' are comments and ignored. Edit the values after '=' signs.\n"
+        << "; Save the file and restart GamePauser for changes to take effect.\n"
+        << ";\n"
+        << "; --- HOTKEY SETTINGS ---\n"
+        << "; The hotkey pauses/resumes the foreground process (e.g., your game).\n"
+        << "; Format: Set the key and any modifier keys (Ctrl, Alt, Shift, Win).\n"
+        << "; Combine modifiers with '+' (e.g., Ctrl+Alt+Shift).\n"
+        << ";\n"
+        << "; Valid key examples:\n"
+        << ";   - Single letters: A, B, P (case doesn't matter)\n"
+        << ";   - Numbers: 1, 2, ...\n"
+        << ";   - Special keys: Space, Enter, Esc, Tab, Pause, Left, Right, Up, Down\n"
+        << ";   - Function keys: F1, F2, ..., F24\n"
+        << ";\n"
+        << "; Examples:\n"
+        << "; PauseKey = F12\n"
+        << "; Modifiers = Ctrl+Alt  (default: Ctrl+Alt + P)\n"
+        << "; Modifiers = Shift+Win+F1  (Shift + Windows key + F1)\n"
+        << "; Modifiers = Alt  (just Alt + your PauseKey, no other modifiers)\n"
+        << ";\n"
+        << "; --- LOGGING SETTINGS ---\n"
+        << "; RetroLogs: Enables old-school terminal-style logging with timestamps and borders.\n"
+        << ";            Set to 0 for plain text logs (easier on modern displays).\n"
+        << ";\n"
+        << "; Default values below - edit as needed.\n"
+        << ";\n"
+        << "[Hotkey]\n"
         << "PauseKey = P\n"
-        << "Modifiers = Ctrl+Alt\n";
-    std::cout << "Created default " << g_iniPath << "\n\n";
+        << "Modifiers = Ctrl+Alt\n"
+        << "\n"
+        << "[Logging]\n"
+        << "RetroLogs = 1  ; 0 = plain logs, 1 = retro amber style with timestamps and borders\n"
+        << ";\n"
+        << "; =============================================================================\n"
+        << "; End of file. For support, check the console output or contact the author.\n"
+        << "; =============================================================================\n";
+    LogRetro("Generated detailed default configuration: " + g_iniPath);
+    LogRetro("Edit the INI file in a text editor to customize hotkeys and logging.");
+}
+// -----------------------------------------------------------------------------
+// Enhanced: Retro-styled logging with broader usage
+// -----------------------------------------------------------------------------
+static void LogRetro(const std::string& msg)
+{
+    if (!g_retroLogs) {
+        std::cout << msg << "\n";
+        return;
+    }
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::tm timeinfo;
+    std::string timestamp;
+    if (localtime_s(&timeinfo, &time_t) == 0) {
+        std::ostringstream oss;
+        oss << "[" << std::put_time(&timeinfo, "%H:%M:%S") << "."
+            << std::setfill('0') << std::setw(3) << ms.count() << "] ";
+        timestamp = oss.str();
+    }
+    else {
+        // Fallback: basic time without local formatting (rare, but safe)
+        std::ostringstream oss_fallback;
+        oss_fallback << "[" << time_t << "." << ms.count() << "] ";
+        timestamp = oss_fallback.str();
+    }
+    std::string border = std::string(timestamp.length() + msg.length() + 4, '-'); // Simple underline for that teletype feel
+    SetConsoleTextAttribute(g_console, AMBER_COLOR);
+    std::cout << border << "\n";
+    std::cout << "| " << timestamp << msg << " |\n";
+    std::cout << border << "\n";
+    SetConsoleTextAttribute(g_console, NORMAL_COLOR);
+    std::cout << std::flush; // Ensure it draws immediately, like a slow terminal
+    // Subtle "flicker" pause—old CRTs weren't instant
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 // -----------------------------------------------------------------------------
 // Low-level keyboard hook
@@ -117,13 +198,17 @@ static void SetCaptureHook(bool enable)
         g_kbHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc,
             GetModuleHandle(nullptr), 0);
         if (g_kbHook) {
-            std::cout << "[Capturing keystrokes - they will be delivered on resume]\n";
-            std::cout << "[Keyboard is globally blocked while paused - this is normal]\n";
+            LogRetro("*** KEYBOARD CAPTURE ACTIVATED *** - Inputs queued for replay on resume");
+            LogRetro("Note: Global keyboard input blocked during pause - this is by design");
+        }
+        else {
+            LogRetro("WARNING: Failed to install keyboard hook - inputs may not capture properly");
         }
     }
     else if (!enable && g_kbHook) {
         UnhookWindowsHookEx(g_kbHook);
         g_kbHook = nullptr;
+        LogRetro("*** KEYBOARD CAPTURE DEACTIVATED *** - Normal input restored");
     }
 }
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -153,7 +238,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         g_targetPid = 0;
         g_capturedWhilePaused.clear();
         g_heldKeys.clear();
-        std::cout << "[ESCAPE] Unpaused - all input discarded\n";
+        LogRetro("*** ESCAPE DETECTED: PAUSE CANCELLED *** - Discarding all captured input");
         return -1; // eat this Esc down (keyup will never reach us)
     }
     // === SPECIAL: Escape – cancel on first Esc down, suppress Esc + any modifier keyups ===
@@ -164,7 +249,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         g_targetPid = 0;
         g_capturedWhilePaused.clear();
         g_heldKeys.clear();
-        std::cout << "[ESCAPE] Unpaused - all input discarded\n";
+        LogRetro("*** ESCAPE DETECTED: PAUSE CANCELLED *** - Discarding all captured input");
         return -1; // eat Esc down
     }
     if (g_unpauseOnNextEsc && kbd->vkCode == VK_ESCAPE && wParam == WM_KEYUP) {
@@ -178,7 +263,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         SuspendOrResumeProcess(false);
         SendCapturedInputs(); // only sends keys typed BEFORE this Enter
         g_targetPid = 0;
-        std::cout << "[ENTER] Unpaused - input replayed (Enter + modifiers suppressed)\n";
+        LogRetro("*** ENTER DETECTED: PAUSE ACCEPTED *** - Replaying input (Enter suppressed)");
         return -1; // eat Enter down
     }
     if (g_unpauseOnNextEnter && kbd->vkCode == VK_RETURN && wParam == WM_KEYUP) {
@@ -212,7 +297,10 @@ static void SuspendOrResumeProcess(bool suspend)
 {
     if (!g_targetPid) return;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return;
+    if (snap == INVALID_HANDLE_VALUE) {
+        LogRetro("ERROR: Could not snapshot threads for PID " + std::to_string(g_targetPid));
+        return;
+    }
     THREADENTRY32 te = { sizeof(te) };
     int count = 0;
     if (Thread32First(snap, &te)) {
@@ -228,8 +316,9 @@ static void SuspendOrResumeProcess(bool suspend)
         } while (Thread32Next(snap, &te));
     }
     CloseHandle(snap);
-    std::cout << (suspend ? "[PAUSED] " : "[RESUMED] ")
-        << g_targetPid << " - " << count << " threads\n";
+    std::ostringstream oss;
+    oss << (suspend ? "*** PROCESS PAUSED ***" : "*** PROCESS RESUMED ***") << " PID: " << g_targetPid << " (" << count << " threads affected)";
+    LogRetro(oss.str());
 }
 // -----------------------------------------------------------------------------
 // Replay captured keystrokes
@@ -237,12 +326,14 @@ static void SuspendOrResumeProcess(bool suspend)
 static void SendCapturedInputs()
 {
     if (g_capturedWhilePaused.empty() && g_heldKeys.empty()) {
-        std::cout << "[Nothing to send]\n";
+        LogRetro("*** INPUT REPLAY: Nothing queued - proceeding empty-handed ***");
         return;
     }
-    std::cout << "[Delivering input";
-    if (!g_heldKeys.empty()) std::cout << " (chord of " << g_heldKeys.size() << " keys)";
-    std::cout << "...]\n";
+    std::ostringstream oss;
+    oss << "*** INPUT REPLAY INITIATED ***";
+    if (!g_heldKeys.empty()) oss << " (Releasing chord of " << g_heldKeys.size() << " held keys)";
+    if (!g_capturedWhilePaused.empty()) oss << " (" << g_capturedWhilePaused.size() / 2 << " key events)";
+    LogRetro(oss.str());
     Sleep(380);
     HWND fg = GetForegroundWindow();
     DWORD fgThreadId = GetWindowThreadProcessId(fg, nullptr);
@@ -276,7 +367,7 @@ static void SendCapturedInputs()
             Sleep(jitter(gen));
     }
     if (attached) AttachThreadInput(GetCurrentThreadId(), fgThreadId, FALSE);
-    std::cout << "[Finished replay]\n";
+    LogRetro("*** INPUT REPLAY COMPLETE *** - Target process fully updated");
     g_capturedWhilePaused.clear();
     g_heldKeys.clear();
 }
@@ -285,11 +376,16 @@ static void SendCapturedInputs()
 // -----------------------------------------------------------------------------
 static void LoadConfig()
 {
+    LogRetro("*** LOADING CONFIGURATION *** - Scanning for GamePauser.ini");
     std::ifstream file(g_iniPath);
     if (!file.is_open()) {
+        LogRetro("No config found - generating detailed default INI file");
         CreateDefaultIni();
         file.open(g_iniPath);
-        if (!file.is_open()) return;
+        if (!file.is_open()) {
+            LogRetro("ERROR: Could not create or reopen INI file - using built-in defaults");
+            return;
+        }
     }
     std::map<std::string, std::string> settings;
     std::string line;
@@ -305,25 +401,32 @@ static void LoadConfig()
     if (g_pauseVK == 0) g_pauseVK = 'P';
     g_pauseMods = ModifiersFromString(settings.count("Modifiers") ? settings["Modifiers"] : "Ctrl+Alt")
         | MOD_NOREPEAT;
+    g_retroLogs = settings.count("RetroLogs") ? (trim(settings["RetroLogs"]) == "1") : true;
     if (!RegisterHotKey(nullptr, HOTKEY_ID, g_pauseMods, g_pauseVK)) {
+        LogRetro("*** HOTKEY REGISTRATION FAILED *** - Run as administrator or change in INI (Modifiers/PauseKey)");
         std::cerr << "Failed to register hotkey - try running as administrator or choose a different combination\n";
     }
     else {
-        std::cout << "Hotkey registered: "
-            << (settings.count("Modifiers") ? settings["Modifiers"] : "Ctrl+Alt")
-            << " + " << (settings.count("PauseKey") ? settings["PauseKey"] : "P")
-            << "\n\n";
+        std::ostringstream oss;
+        oss << "*** HOTKEY READY *** " << (settings.count("Modifiers") ? settings["Modifiers"] : "Ctrl+Alt")
+            << " + " << (settings.count("PauseKey") ? settings["PauseKey"] : "P");
+        LogRetro(oss.str());
+        LogRetro("Press the hotkey to pause/resume the foreground process");
     }
+    LogRetro("*** CONFIG LOAD COMPLETE *** - System armed and waiting...");
 }
 static void CleanupAndExit()
 {
-    std::cout << "\n[Shutting down - ensuring nothing stays paused]\n";
+    LogRetro("*** SHUTDOWN SEQUENCE INITIATED *** - Final safety checks");
     SetCaptureHook(false);
     if (g_targetPid) {
+        LogRetro("Force-resuming lingering process PID " + std::to_string(g_targetPid));
         SuspendOrResumeProcess(false);
         g_targetPid = 0;
     }
     UnregisterHotKey(nullptr, HOTKEY_ID);
+    LogRetro("*** GOODBYE *** - GamePauser signing off. Stay accessible.");
+    SetConsoleTextAttribute(g_console, NORMAL_COLOR); // Reset color on exit
 }
 static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType)
 {
@@ -342,6 +445,16 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType)
 // -----------------------------------------------------------------------------
 int main()
 {
+    // Retro boot sequence
+    g_console = GetStdHandle(STD_OUTPUT_HANDLE);
+    SetConsoleTextAttribute(g_console, NORMAL_COLOR); // Start neutral
+    LogRetro("==========================================");
+    LogRetro("|     GAMEPAUSER v1.2.3 - BOOTING...     |");
+    LogRetro("==========================================");
+    LogRetro("| Accessibility tool for instant process |");
+    LogRetro("| pause/resume with keystroke capture.   |");
+    LogRetro("==========================================");
+
     char exePath[MAX_PATH] = {};
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
     std::string dir = exePath;
@@ -350,9 +463,12 @@ int main()
     g_iniPath = dir + "GamePauser.ini";
     atexit(CleanupAndExit);
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-    std::cout << "GamePauser - Accessibility-focused process pauser\n";
-    std::cout << "Special keys: Escape = cancel, Enter = accept (without sending Enter)\n\n";
+    LogRetro("*** SPECIAL CONTROLS ACTIVE *** - ESC = cancel pause, ENTER = accept (no Enter sent)");
     LoadConfig();
+    LogRetro("==========================================");
+    LogRetro("|          MONITORING FOREGROUND         |");
+    LogRetro("|     Hotkey press detected? STANDBY.    |");
+    LogRetro("==========================================");
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0)) {
         if (msg.message == WM_HOTKEY && msg.wParam == HOTKEY_ID) {
@@ -377,10 +493,10 @@ int main()
                 }
                 g_targetPid = pid;
                 g_capturedWhilePaused.clear();
-                g_heldKeys.clear();  // Reset for during-pause tracking only
+                g_heldKeys.clear(); // Reset for during-pause tracking only
                 // Clear any held keys before suspending
                 std::set<WORD> initialHeld;
-                for (int vk = 1; vk < 256; ++vk) {  // Skip 0, cover common range
+                for (int vk = 1; vk < 256; ++vk) { // Skip 0, cover common range
                     if (GetAsyncKeyState(vk) & 0x8000) {
                         initialHeld.insert(static_cast<WORD>(vk));
                     }
@@ -405,11 +521,14 @@ int main()
                 if (attached) {
                     AttachThreadInput(GetCurrentThreadId(), fgThreadId, FALSE);
                 }
-                std::cout << "[Cleared " << initialHeld.size() << " held keys]\n";
+                std::ostringstream oss;
+                oss << "*** PRE-PAUSE CLEANUP *** - Released " << initialHeld.size() << " held keys to prevent stuck input";
+                LogRetro(oss.str());
                 g_unpauseOnNextEsc = true;
                 g_unpauseOnNextEnter = true;
                 SuspendOrResumeProcess(true);
                 SetCaptureHook(true);
+                LogRetro("*** PAUSE MODE ENGAGED *** - Type freely; replay on resume or special keys");
             }
         }
     }
